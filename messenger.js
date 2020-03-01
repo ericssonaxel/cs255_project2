@@ -66,11 +66,11 @@ function ENCRYPT(mk, plaintext, associated_data) {
   several ways: fixed to a constant; derived from mk alongside an independent
   AEAD encryption key; derived as an additional output from KDF_CK(); or chosen
   randomly and transmitted.*/
-  return encryptWithGCM(mk.slice(0, 32), plaintext, associated_data); //TODO add associated_data?
+  return encryptWithGCM(mk.slice(0, 32), plaintext, associated_data);
 }
 
 function DECRYPT(mk, ciphertext, associated_data) {
-  return decryptWithGCM(mk.slice(0, 32), ciphertext, associated_data); //TODO add associated_data?
+  return decryptWithGCM(mk.slice(0, 32), ciphertext, associated_data);
 }
 
 function HEADER(dh_pair, pn, n, mk, govPublicKey) {
@@ -100,6 +100,7 @@ function SkipMessageKeys(state, until) {
 }
 
 function TrySkippedMessageKeys(state, header, ciphertext) {
+  // TODO: implement this
   return null;
   /*
     if (header.dh, header.n) in state.MKSKIPPED:
