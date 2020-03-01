@@ -37,7 +37,7 @@ function DH(dh_pair, dh_pub) {
   key from the DH key pair dh_pair and the DH public key dh_pub. If the DH
   function rejects invalid public keys, then this function may raise an
   exception which terminates processing.*/
-  return computeDH(dh_pair.secretKey, dh_pub);
+  return computeDH(dh_pair.sec, dh_pub);
 }
 function KDF_RK(rk, dh_out) {
   /*
@@ -66,51 +66,41 @@ function ENCRYPT(mk, plaintext, associated_data) {
   several ways: fixed to a constant; derived from mk alongside an independent
   AEAD encryption key; derived as an additional output from KDF_CK(); or chosen
   randomly and transmitted.*/
-  return encryptWithGCM(mk, plaintext); //TODO add associated_data?
+  return encryptWithGCM(mk.slice(0, 32), plaintext, associated_data); //TODO add associated_data?
 }
 
 function DECRYPT(mk, ciphertext, associated_data) {
-  return decryptWithGCM(mk, ciphertext); //TODO add associated_data?
+  return decryptWithGCM(mk.slice(0, 32), ciphertext, associated_data); //TODO add associated_data?
 }
 
-function HEADER(dh_pair, pn, n, govPublicKey) {
+function HEADER(dh_pair, pn, n, mk, govPublicKey) {
+  const dhGov = GENERATE_DH();
+  const kGov = DH(dhGov, govPublicKey);
+
   return {
     pub: dh_pair.pub,
     previous_chain_length: pn,
     message_number: n,
-    vGov: 
-    cGov: 
+    vGov: dhGov.pub,
+    cGov: ENCRYPT(kGov, mk.slice(0, 32), null)
   };
 }
-function CONCAT(header) {
-  return JSON.stringify(header); //TODO is this ok?
-}
-function RatchetDecrypt(state, header, ciphertext) {
-  //plaintext = TrySkippedMessageKeys(state, header, ciphertext, AD)
-  //if plaintext != None:
-  //    return plaintext
-  //if header.dh != state.DHr:
-  //    SkipMessageKeys(state, header.pn)
-  //    DHRatchet(state, header)
-  SkipMessageKeys(this.comms, header.message_number);
-  var chainkeyderivation = KDF_CK(this.comms.ckr);
-  this.conns.ckr = chainkeyderivation[0];
-  var messagekey = chainkeyderivation[1];
-  this.conns.nr += 1;
-  return DECRYPT(messagekey, ciphertext, CONCAT(header));
-}
+
 function SkipMessageKeys(state, until) {
-  if (this.conns.nr + max_skip < until) throw Exception;
-  if (this.conns.ckr != null) {
-    while (this.conns.nr < until) {
-      var chainkeyderivation = KDF_CK(this.comms.ckr);
-      this.conns.ckr = chainkeyderivation[0];
+  // TODO: tryskipped
+  if (state.nr + max_skip < until) throw Exception;
+  if (state.ckr != null) {
+    while (state.nr < until) {
+      var chainkeyderivation = KDF_CK(state.ckr);
+      state.ckr = chainkeyderivation[0];
       var messagekey = chainkeyderivation[1];
-      this.conns.nr += 1;
+      state.nr += 1;
     }
   }
 }
+
 function TrySkippedMessageKeys(state, header, ciphertext) {
+  return null;
   /*
     if (header.dh, header.n) in state.MKSKIPPED:
         mk = state.MKSKIPPED[header.dh, header.n]
@@ -120,16 +110,15 @@ function TrySkippedMessageKeys(state, header, ciphertext) {
         return None
   */
 }
-function DHRatchet() {
-  /*
-  state.PN = state.Ns
-  state.Ns = 0
-  state.Nr = 0
-  state.DHr = header.dh
-  state.RK, state.CKr = KDF_RK(state.RK, DH(state.DHs, state.DHr))
-  state.DHs = GENERATE_DH()
-  state.RK, state.CKs = KDF_RK(state.RK, DH(state.DHs, state.DHr))
-  */
+
+function DHRatchet(state, header) {
+  state.pn = state.ns;
+  state.ns = 0;
+  state.nr = 0;
+  state.dhr = header.pub;
+  [state.rk, state.ckr] = KDF_RK(state.rk, DH(state.dhs, state.dhr));
+  state.dhs = GENERATE_DH();
+  [state.rk, state.cks] = KDF_RK(state.rk, DH(state.dhs, state.dhr));
 }
 
 export default class MessengerClient {
@@ -199,11 +188,11 @@ export default class MessengerClient {
    * Return Type: Tuple of [dictionary, string]
    */
   sendMessage(name, plaintext) {
+    const theirCertificate = this.certs[name];
+    const bobDHPublicKey = theirCertificate.pub;
+    const SK = DH(this.dhKeyPair, bobDHPublicKey).slice(0, 32);
     if (!this.conns[name]) {
       // ratchet init alice
-      const theirCertificate = this.certs[name];
-      const bobDHPublicKey = theirCertificate.pub;
-      const SK = DH(this.dhKeyPair, bobDHPublicKey);
       const dhs = GENERATE_DH();
       const dhr = bobDHPublicKey;
       const [rk, cks] = KDF_RK(SK, DH(dhs, dhr));
@@ -220,13 +209,13 @@ export default class MessengerClient {
       };
     }
 
-    state = this.conns[name];
+    const state = this.conns[name];
     // ratchet encrypt
     let mk;
     [state.cks, mk] = KDF_CK(state.cks);
-    header = HEADER(state.dhs, state.pn, state.ns, this.govPublicKey);
+    const header = HEADER(state.dhs, state.pn, state.ns, mk, this.govPublicKey);
     state.ns++;
-    return [header, ENCRYPT(mk, plaintext, "NOT TO BE USED YET")];
+    return [header, ENCRYPT(mk, plaintext, JSON.stringify(header))];
   }
 
   /**
@@ -243,7 +232,7 @@ export default class MessengerClient {
       // ratchet init bob
       const theirCertificate = this.certs[name];
       const theirPublicKey = theirCertificate.pub;
-      const SK = DH(this.dhKeyPair, theirPublicKey);
+      const SK = DH(this.dhKeyPair, theirPublicKey).slice(0, 32);
       const dhs = this.dhKeyPair;
 
       this.conns[name] = {
@@ -259,10 +248,10 @@ export default class MessengerClient {
       };
     }
 
-    state = this.conns[name];
+    const state = this.conns[name];
     // ratchet decrypt
-    let plaintext = TrySkippedMessageKeys(state, header, ciphertext, AD);
-    if (plaintext !== None) return plaintext;
+    let plaintext = TrySkippedMessageKeys(state, header, ciphertext, null);
+    if (plaintext != null) return plaintext;
     if (header.pub !== state.dhr) {
       SkipMessageKeys(state, header.previous_chain_length);
       DHRatchet(state, header);
@@ -271,7 +260,7 @@ export default class MessengerClient {
     let mk;
     [state.ckr, mk] = KDF_CK(state.ckr);
     state.nr++;
-    plaintext = DECRYPT(mk, ciphertext, CONCAT("NOT TO BE USED YET", header));
+    plaintext = DECRYPT(mk, ciphertext, JSON.stringify(header));
     return plaintext;
   }
 }
