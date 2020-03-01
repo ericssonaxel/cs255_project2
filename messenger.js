@@ -19,28 +19,27 @@ import {
   signWithECDSA,
   verifyWithECDSA,
   randomHexString,
-  hexStringSlice,
+  hexStringSlice
 } from "./lib";
 
 /********* Implementation ********/
-
 
 //from signal specification
 const chain_constant = randomHexString(64); //TODO verify that hex string of length 64 contains 32 bytes of info
 const max_skip = 256;
 
-function GENERATE_DH(){
+function GENERATE_DH() {
   /*Returns a new Diffie-Hellman key pair.*/
   return generateEG();
 }
-function DH(dh_pair, dh_pub){;
+function DH(dh_pair, dh_pub) {
   /*Returns the output from the Diffie-Hellman calculation between the private
   key from the DH key pair dh_pair and the DH public key dh_pub. If the DH
   function rejects invalid public keys, then this function may raise an
   exception which terminates processing.*/
   return computeDH(dh_pair.secretKey, dh_pub);
 }
-function KDF_RK(rk, dh_out){
+function KDF_RK(rk, dh_out) {
   /*
   Returns a pair (32-byte root key, 32-byte chain key) as the output of applying
   a KDF keyed by a 32-byte root key rk to a Diffie-Hellman output dh_out.
@@ -48,19 +47,19 @@ function KDF_RK(rk, dh_out){
   described in 2.2.
   */
   var bytes64 = HMACWithSHA512(rk, dh_out);
-  var bytes32_root = hexStringSlice(bytes64, 0,256-1);
-  var bytes32_chain = hexStringSlice(bytes64, 256, 512-1);
+  var bytes32_root = hexStringSlice(bytes64, 0, 256 - 1);
+  var bytes32_chain = hexStringSlice(bytes64, 256, 512 - 1);
   return [bytes32_root, bytes32_chain];
 }
-function KDF_CK(ck){
+function KDF_CK(ck) {
   /*Returns a pair (32-byte chain key, 32-byte message key) as the output of
   applying a KDF keyed by a 32-byte chain key ck to some constant.*/
   var bytes64 = HMACWithSHA512(ck, chain_constant);
-  var bytes32_chain = hexStringSlice(bytes64, 0,256-1);
-  var bytes32_message = hexStringSlice(bytes64, 256, 512-1);
+  var bytes32_chain = hexStringSlice(bytes64, 0, 256 - 1);
+  var bytes32_message = hexStringSlice(bytes64, 256, 512 - 1);
   return [bytes32_chain, bytes32_message];
 }
-function ENCRYPT(mk, plaintext, associated_data){
+function ENCRYPT(mk, plaintext, associated_data) {
   /*Returns an AEAD encryption of plaintext with message key mk. The
   associated_data is authenticated but is not included in the ciphertext.
   Because each message key is only used once, the AEAD nonce may handled in
@@ -69,45 +68,49 @@ function ENCRYPT(mk, plaintext, associated_data){
   randomly and transmitted.*/
   return encryptWithGCM(mk, plaintext); //TODO add associated_data?
 }
-function DECRYPT(mk, ciphertext, associated_data){
+
+function DECRYPT(mk, ciphertext, associated_data) {
   return decryptWithGCM(mk, ciphertext); //TODO add associated_data?
 }
-function HEADER(dh_pair, pn, n){
+
+function HEADER(dh_pair, pn, n, govPublicKey) {
   return {
     pub: dh_pair.pub,
     previous_chain_length: pn,
-    message_number: n
+    message_number: n,
+    vGov: 
+    cGov: 
+  };
+}
+function CONCAT(header) {
+  return JSON.stringify(header); //TODO is this ok?
+}
+function RatchetDecrypt(state, header, ciphertext) {
+  //plaintext = TrySkippedMessageKeys(state, header, ciphertext, AD)
+  //if plaintext != None:
+  //    return plaintext
+  //if header.dh != state.DHr:
+  //    SkipMessageKeys(state, header.pn)
+  //    DHRatchet(state, header)
+  SkipMessageKeys(this.comms, header.message_number);
+  var chainkeyderivation = KDF_CK(this.comms.ckr);
+  this.conns.ckr = chainkeyderivation[0];
+  var messagekey = chainkeyderivation[1];
+  this.conns.nr += 1;
+  return DECRYPT(messagekey, ciphertext, CONCAT(header));
+}
+function SkipMessageKeys(state, until) {
+  if (this.conns.nr + max_skip < until) throw Exception;
+  if (this.conns.ckr != null) {
+    while (this.conns.nr < until) {
+      var chainkeyderivation = KDF_CK(this.comms.ckr);
+      this.conns.ckr = chainkeyderivation[0];
+      var messagekey = chainkeyderivation[1];
+      this.conns.nr += 1;
+    }
   }
 }
-function CONCAT(header){
-  return JSON.stringify(header);   //TODO is this ok?
-}
-function RatchetDecrypt(state, header, ciphertext){
-    //plaintext = TrySkippedMessageKeys(state, header, ciphertext, AD)
-    //if plaintext != None:
-    //    return plaintext
-    //if header.dh != state.DHr:
-    //    SkipMessageKeys(state, header.pn)
-    //    DHRatchet(state, header)
-    SkipMessageKeys(this.comms, header.message_number)
-    var chainkeyderivation = KDF_CK(this.comms.ckr);
-    this.conns.ckr = chainkeyderivation[0];
-    var messagekey = chainkeyderivation[1];
-    this.conns.nr += 1;
-    return DECRYPT(messagekey, ciphertext, CONCAT(header));
-}
-function SkipMessageKeys(state, until){
-    if(this.conns.nr + max_skip < until) throw Exception;
-    if(this.conns.ckr != null){
-      while(this.conns.nr < until){
-        var chainkeyderivation = KDF_CK(this.comms.ckr);
-        this.conns.ckr = chainkeyderivation[0];
-        var messagekey = chainkeyderivation[1];
-        this.conns.nr += 1;
-      }
-    }
-}
-function TrySkippedMessageKeys(state, header, ciphertext){
+function TrySkippedMessageKeys(state, header, ciphertext) {
   /*
     if (header.dh, header.n) in state.MKSKIPPED:
         mk = state.MKSKIPPED[header.dh, header.n]
@@ -117,7 +120,7 @@ function TrySkippedMessageKeys(state, header, ciphertext){
         return None
   */
 }
-function DHRatchet(){
+function DHRatchet() {
   /*
   state.PN = state.Ns
   state.Ns = 0
@@ -129,31 +132,24 @@ function DHRatchet(){
   */
 }
 
-
-
 export default class MessengerClient {
   constructor(certAuthorityPublicKey, govPublicKey) {
-      // the certificate authority DSA public key is used to
-      // verify the authenticity and integrity of certificates
-      // of other users (see handout and receiveCertificate)
+    // the certificate authority DSA public key is used to
+    // verify the authenticity and integrity of certificates
+    // of other users (see handout and receiveCertificate)
 
-      // you can store data as needed in these objects.
-      // Feel free to modify their structure as you see fit.
-      this.caPublicKey = certAuthorityPublicKey;
-      this.govPublicKey = govPublicKey;
-      this.conns = {
-        dhs: null,
-        dhr: null,
-        rk: null,
-        cks: null,
-        ckr: null,
-        ns: 0,
-        nr: 0,
-        pn: 0,
-        mkskipped: {}
-      }; // data for each active connection
-      this.certs = {}; // certificates of other users
-    };
+    // you can store data as needed in these objects.
+    // Feel free to modify their structure as you see fit.
+    this.caPublicKey = certAuthorityPublicKey;
+    this.govPublicKey = govPublicKey;
+
+    // { pub, sec }
+    this.dhKeyPair = null;
+
+    // {[name: string]: {...}}
+    this.conns = {};
+    this.certs = {}; // certificates of other users
+  }
 
   /**
    * Generate a certificate to be stored with the certificate authority.
@@ -165,8 +161,13 @@ export default class MessengerClient {
    * Return Type: certificate object/dictionary
    */
   generateCertificate(username) {
-    throw("not implemented!");
-    const certificate = {};
+    const { pub, sec } = generateEG();
+    this.dhKeyPair = { pub, sec };
+    // TODO: put this secret key somewhere
+    const certificate = {
+      username,
+      pub
+    };
     return certificate;
   }
 
@@ -180,7 +181,12 @@ export default class MessengerClient {
    * Return Type: void
    */
   receiveCertificate(certificate, signature) {
-    throw("not implemented!");
+    const { username, pub } = certificate;
+    if (
+      !verifyWithECDSA(this.caPublicKey, JSON.stringify(certificate), signature)
+    )
+      throw "bad certificate";
+    this.certs[username] = certificate;
   }
 
   /**
@@ -193,12 +199,35 @@ export default class MessengerClient {
    * Return Type: Tuple of [dictionary, string]
    */
   sendMessage(name, plaintext) {
-    throw("not implemented!");
-    const header = {};
-    const ciphertext = "";
-    return [header, ciphertext];
-  }
+    if (!this.conns[name]) {
+      // ratchet init alice
+      const theirCertificate = this.certs[name];
+      const bobDHPublicKey = theirCertificate.pub;
+      const SK = DH(this.dhKeyPair, bobDHPublicKey);
+      const dhs = GENERATE_DH();
+      const dhr = bobDHPublicKey;
+      const [rk, cks] = KDF_RK(SK, DH(dhs, dhr));
+      this.conns[name] = {
+        dhs,
+        dhr,
+        rk,
+        cks,
+        ckr: null,
+        ns: 0,
+        nr: 0,
+        pn: 0,
+        mkskipped: {}
+      };
+    }
 
+    state = this.conns[name];
+    // ratchet encrypt
+    let mk;
+    [state.cks, mk] = KDF_CK(state.cks);
+    header = HEADER(state.dhs, state.pn, state.ns, this.govPublicKey);
+    state.ns++;
+    return [header, ENCRYPT(mk, plaintext, "NOT TO BE USED YET")];
+  }
 
   /**
    * Decrypt a message received from another user.
@@ -210,7 +239,39 @@ export default class MessengerClient {
    * Return Type: string
    */
   receiveMessage(name, [header, ciphertext]) {
-    throw("not implemented!");
+    if (!this.conns[name]) {
+      // ratchet init bob
+      const theirCertificate = this.certs[name];
+      const theirPublicKey = theirCertificate.pub;
+      const SK = DH(this.dhKeyPair, theirPublicKey);
+      const dhs = this.dhKeyPair;
+
+      this.conns[name] = {
+        dhs,
+        dhr: null,
+        rk: SK,
+        cks: null,
+        ckr: null,
+        ns: 0,
+        nr: 0,
+        pn: 0,
+        mkskipped: {}
+      };
+    }
+
+    state = this.conns[name];
+    // ratchet decrypt
+    let plaintext = TrySkippedMessageKeys(state, header, ciphertext, AD);
+    if (plaintext !== None) return plaintext;
+    if (header.pub !== state.dhr) {
+      SkipMessageKeys(state, header.previous_chain_length);
+      DHRatchet(state, header);
+    }
+    SkipMessageKeys(state, header.message_number);
+    let mk;
+    [state.ckr, mk] = KDF_CK(state.ckr);
+    state.nr++;
+    plaintext = DECRYPT(mk, ciphertext, CONCAT("NOT TO BE USED YET", header));
     return plaintext;
   }
-};
+}
